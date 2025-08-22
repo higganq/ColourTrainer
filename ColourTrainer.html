@@ -1,0 +1,2088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fantasia - Color Sphere Game (v2)</title>
+<style>
+  :root {
+    --panel-width: 300px;
+    --panel-bg: #f0f0f0;
+    --panel-border: #d6d6d6;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    width: 100%;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+    background: #eee;
+  }
+  #game-container {
+    flex: 1 1 auto;
+    position: relative;
+    background: #eee;
+  }
+  canvas { display: block; }
+
+  /* Desktop panel (docked right) */
+  #ui-panel {
+    /* Position the panel as an overlay on top of the game container.  It always lives on the right side
+       of the viewport on desktop and at the bottom on mobile. */
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--panel-width);
+    background: var(--panel-bg);
+    padding: 15px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    border-left: 1px solid var(--panel-border);
+    transition: transform 0.3s ease;
+    /* Raise the panel above the pause overlay (z-index 15) so controls remain clickable */
+    z-index: 20;
+  }
+  /* When hidden on desktop, slide it completely off-screen to the right */
+  #ui-panel.hidden-desktop { transform: translateX(100%); }
+
+  h3 { margin: 0 0 10px; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .slider-container { display: flex; align-items: center; margin: 6px 0; }
+  .slider-container input { flex: 1; margin-left: 10px; }
+  .checkbox-container { margin: 6px 0; }
+  .history-item { display: flex; align-items: center; justify-content: space-between; font-size: 14px; margin: 2px 0; }
+  .history-color { display: inline-block; width: 16px; height: 16px; border-radius: 50%; border: 1px solid #000; margin-right: 6px; }
+
+  #bonus-msg {
+    position: absolute; inset: 50% auto auto 50%;
+    transform: translate(-50%, -50%) scale(1);
+    font-size: 32px; font-weight: 800; opacity: 0; pointer-events: none;
+    color: gold; text-shadow: 2px 2px 6px rgba(0,0,0,0.5);
+    transition: opacity 0.5s, transform 0.5s; text-align: center;
+    z-index: 20;
+  }
+  #bonus-msg.show { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+
+  /* Pause overlay */
+  #pauseOverlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.4);
+    color: white;
+    font-size: 48px;
+    font-weight: bold;
+    z-index: 15;
+  }
+
+  /* Particle styles are drawn via canvas; no CSS needed here */
+
+  /* Menu toggle button */
+  #menuToggle {
+    position: absolute; top: 10px; left: 10px; z-index: 30;
+    background: rgba(255,255,255,0.9); border: 1px solid #ccc; border-radius: 10px;
+    padding: 8px 10px; font-weight: 600; cursor: pointer; backdrop-filter: blur(6px);
+  }
+
+  /* Mobile layout: panel becomes bottom drawer */
+  @media (max-width: 800px) {
+    body { flex-direction: column; }
+    #ui-panel {
+      top: auto;
+      right: 0;
+      bottom: 0;
+      width: 100%;
+      max-height: 55vh;
+      border-left: none;
+      border-top: 1px solid var(--panel-border);
+      transform: translateY(0);
+    }
+    /* When closed on mobile, slide it down off-screen */
+    #ui-panel.drawer-closed { transform: translateY(100%); }
+    #drawerHandle {
+      position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
+      width: 64px; height: 6px; border-radius: 6px; background: #bbb;
+    }
+    #menuToggle { left: 10px; top: 10px; }
+  }
+
+  /* Tiny test output (hidden by default) */
+  #tests { display:none; font: 12px/1.3 monospace; white-space: pre-wrap; padding:8px; background:#111; color:#0f0; }
+
+  /* Top info bar displayed above the game on all devices.  This bar shows
+     the current player, their highest score, and the current target colour.
+     It is absolutely positioned within the game container and uses a
+     semi-transparent background for legibility.  Flex layout is used to
+     arrange the items horizontally with even spacing. */
+  #topInfo {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    background: rgba(255,255,255,0.8);
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-weight: 600;
+    z-index: 25;
+    pointer-events: none;
+  }
+
+  /* Colour dot used in the top info bar.  Defines a small circle with a
+     border to represent the current target colour. */
+  .top-color-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 1px solid #000;
+    display: inline-block;
+    margin-right: 4px;
+  }
+
+  /* Ensure there is spacing between high score, accuracy and target colour in the top bar */
+  #topAccuracy{
+    margin-left: 8px;
+    margin-right: 8px;
+  }
+</style>
+</head>
+<body>
+    <div id="game-container">
+    <button id="menuToggle" aria-label="Toggle menu">☰ Menu</button>
+    <!-- Top info bar: displays player name, high score and target colour -->
+    <div id="topInfo">
+      <span id="topPlayer">Guest</span>
+      <span id="topHighScore">High Score: 0</span>
+      <!-- Overall click accuracy will appear here.  Updated after each click to
+           reflect the percentage of correct hits versus total clicks. -->
+      <span id="topAccuracy">Acc: 100%</span>
+      <span id="topTargetColor"><span class="top-color-dot" style="background:red;"></span>Red</span>
+      <!-- Timer display will show the remaining time in seconds when timer mode is active -->
+      <span id="topTimer" style="display:none;">Time: 30</span>
+      <!-- Sequence display: shows the list of colours to clear in order.  Each
+           colour is represented by a small dot; the current target is
+           highlighted.  Hidden when sequence mode is disabled. -->
+      <span id="topSequence" style="display:none;"></span>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="bonus-msg"></div>
+    <!-- Overlay shown when the game is paused -->
+    <div id="pauseOverlay">Paused</div>
+  </div>
+
+  <div id="ui-panel">
+    <div id="drawerHandle" aria-hidden="true"></div>
+    <h3>Fantasia</h3>
+
+    <!-- Player selection row: use a drop-down to choose existing players -->
+    <div class="row" id="userRow">
+      <label for="playerSelect" style="margin-right:4px;">Player:</label>
+      <select id="playerSelect" style="flex:1;"></select>
+    </div>
+    <!-- New player row: enter a new name to add to the list -->
+    <div class="row" id="userEditRow" style="margin-bottom:8px;">
+      <input id="nameInput" placeholder="New player name" style="flex:1;" />
+      <button id="saveNameBtn" title="Add player">Add</button>
+    </div>
+
+    <!-- Action buttons row: relocated directly beneath the player name entry.  This
+         positions the Start, Pause and Clear History buttons near the player
+         selection so they are easily accessible. -->
+    <div class="row" id="actionRow" style="gap:8px; margin-bottom:8px;">
+      <button id="startBtn">Start Game</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="clearHistoryBtn">Clear History</button>
+    </div>
+
+    <div class="row">Points: <strong id="points">0</strong></div>
+    <div class="row">Level: <strong id="level">1</strong></div>
+    <div class="row">Streak: <strong id="streak">0</strong></div>
+    <!-- Target colour is now displayed in the top info bar.  We keep a hidden span for scripting purposes. -->
+    <div style="display:none;">Target Color: <span id="targetColor">Red</span></div>
+
+    <div class="slider-container">
+      <label for="morph">Morph</label>
+      <input type="range" id="morph" min="0" max="1" step="0.01" value="0.1" />
+    </div>
+
+    <div class="slider-container">
+      <label for="speed">Speed</label>
+      <input type="range" id="speed" min="0.5" max="5" step="0.1" value="1" />
+    </div>
+
+    <div class="checkbox-container"><label><input type="checkbox" id="rotation" /> Rotation</label></div>
+    <div class="checkbox-container"><label><input type="checkbox" id="sizeVariation" /> Size Variation</label></div>
+    <div class="checkbox-container"><label><input type="checkbox" id="vibration" /> Vibration (Mobile)</label></div>
+    <div class="checkbox-container"><label><input type="checkbox" id="trails" /> Trails</label></div>
+    <div class="checkbox-container"><label><input type="checkbox" id="shapeMorph" /> Shape Morph</label></div>
+    <div class="checkbox-container"><label><input type="checkbox" id="showNames" checked /> Show Color Names</label></div>
+
+    <div class="checkbox-container"><label><input type="checkbox" id="soundToggle" checked /> Sound On</label></div>
+
+    <!-- Timer mode introduces a countdown clock for each level.  When enabled,
+         the player must clear the board before time runs out.  This trains
+         quick recognition and improves reaction speed. -->
+    <div class="checkbox-container"><label><input type="checkbox" id="timerToggle" /> Timer Mode (30s)</label></div>
+
+    <!-- Hard mode toggle introduces an extended palette of subtle colour shades
+         for advanced training.  When enabled, spheres are drawn from a list
+         of lighter and darker hues rather than the basic seven colours. -->
+    <div class="checkbox-container"><label><input type="checkbox" id="hardModeToggle" /> Hard Mode (Subtle Colors)</label></div>
+    <!-- Stroop mode presents mismatched colour names on the spheres to challenge
+         cognitive inhibition. -->
+    <div class="checkbox-container"><label><input type="checkbox" id="stroopToggle" /> Stroop Mode (Mismatched Names)</label></div>
+
+    <!-- Sequence mode introduces a memory challenge where the player must
+         clear multiple target colours in a specific order.  When enabled,
+         the game chooses a short sequence of colours at the start of each
+         level; the player must click spheres of each colour in the given
+         order to complete the level.  This trains short‑term memory and
+         sequential processing. -->
+    <div class="checkbox-container"><label><input type="checkbox" id="sequenceToggle" /> Sequence Mode (Memory Challenge)</label></div>
+
+    <!-- Colour-blind mode overlays a symbol on each sphere representing its base
+         hue.  This assists players with colour vision deficiencies by
+         providing an additional cue. -->
+    <div class="checkbox-container"><label><input type="checkbox" id="colorBlindToggle" /> Colour‑blind Mode (Symbols)</label></div>
+
+    <h4 style="margin:10px 0 6px;">Last 30 Moves</h4>
+    <div id="history"></div>
+
+    <h4 style="margin:10px 0 6px;">Color Mastery</h4>
+    <div id="mastery"></div>
+
+    <h4 style="margin:10px 0 6px;">High Scores</h4>
+    <div id="highScores"></div>
+
+    <!-- Achievements: displays unlocked milestones with checkboxes.  Each
+         achievement helps motivate the player to strive for higher scores,
+         longer streaks and faster completions. -->
+    <h4 style="margin:10px 0 6px;">Achievements</h4>
+    <div id="achievements"></div>
+
+    <h4 style="margin:10px 0 6px;">Self Tests</h4>
+    <pre id="tests"></pre>
+  </div>
+
+<script>
+  // --- Canvas & Layout ---
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+  const uiPanel = document.getElementById('ui-panel');
+  // Store a reference to the game container for dynamic backgrounds
+  const gameContainer = document.getElementById('game-container');
+  const menuToggle = document.getElementById('menuToggle');
+
+  function isMobileLayout(){ return window.innerWidth <= 800; }
+  let panelOpen = true;
+
+  /**
+   * Resize the canvas and slide the UI panel based on the current layout and open state.
+   *
+   * On mobile, the panel behaves like a bottom drawer; on desktop it slides in from
+   * the right.  We avoid toggling display to keep the panel in the DOM so its
+   * dimensions can be measured reliably when closed.  Instead, we use CSS
+   * transforms via the `.hidden-desktop` and `.drawer-closed` classes.
+   */
+  function resizeCanvas(){
+    if(isMobileLayout()){
+      // Ensure the desktop class is removed when switching to mobile
+      uiPanel.classList.remove('hidden-desktop');
+      // Toggle the mobile drawer state via the drawer-closed class
+      uiPanel.classList.toggle('drawer-closed', !panelOpen);
+      // When closed, the panel is translated off-screen so its height doesn't matter
+      const panelHeight = panelOpen ? uiPanel.getBoundingClientRect().height : 0;
+      canvas.width = window.innerWidth;
+      canvas.height = Math.max(200, window.innerHeight - panelHeight);
+      // Match the element's CSS size to its drawing buffer for accurate hit detection
+      canvas.style.width = canvas.width + 'px';
+      canvas.style.height = canvas.height + 'px';
+    } else {
+      // Ensure the mobile drawer class is removed when in desktop mode
+      uiPanel.classList.remove('drawer-closed');
+      // Toggle the desktop slide state via the hidden-desktop class
+      uiPanel.classList.toggle('hidden-desktop', !panelOpen);
+      // Compute the width that the panel should occupy when open.  Even when closed
+      // we measure its width so that toggling open calculates the correct canvas size.
+      const panelWidth = panelOpen ? uiPanel.getBoundingClientRect().width : 0;
+      canvas.width = Math.max(200, window.innerWidth - panelWidth);
+      canvas.height = window.innerHeight;
+      // Match the element's CSS size to its drawing buffer for accurate hit detection
+      canvas.style.width = canvas.width + 'px';
+      canvas.style.height = canvas.height + 'px';
+    }
+    // Always reset display so the panel is rendered; transforms handle hiding
+    uiPanel.style.display = '';
+  }
+  window.addEventListener('resize', resizeCanvas);
+  // Toggle the UI panel visibility when the menu button is clicked.  We simply flip
+  // the panelOpen flag and call resizeCanvas(), which applies the appropriate
+  // transform classes for desktop and mobile layouts.  Avoid altering display
+  // properties here so the panel can be measured correctly even when hidden.
+  menuToggle.addEventListener('click', () => {
+    panelOpen = !panelOpen;
+    resizeCanvas();
+    // Persist the open state so it can be restored on reload
+    saveProfile();
+  });
+  resizeCanvas();
+
+  // --- UI Elements ---
+  const pointsEl = document.getElementById('points');
+  const levelEl  = document.getElementById('level');
+  const streakEl = document.getElementById('streak');
+  const targetColorEl = document.getElementById('targetColor');
+  const bonusMsgEl = document.getElementById('bonus-msg');
+  const historyEl = document.getElementById('history');
+  const masteryEl = document.getElementById('mastery');
+  const highScoresDiv = document.getElementById('highScores');
+  const speedSlider = document.getElementById('speed');
+  const showNamesCheckbox = document.getElementById('showNames');
+  // grab reference to the sound toggle checkbox
+  const soundToggle = document.getElementById('soundToggle');
+  // new UI references for improved features
+  const morphSlider = document.getElementById('morph');
+  const rotationCheckbox = document.getElementById('rotation');
+  const sizeVarCheckbox = document.getElementById('sizeVariation');
+  const vibrationCheckbox = document.getElementById('vibration');
+  const trailsCheckbox = document.getElementById('trails');
+  const shapeMorphCheckbox = document.getElementById('shapeMorph');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const pauseOverlay = document.getElementById('pauseOverlay');
+  // Timer mode toggle and timer display
+  const timerToggle = document.getElementById('timerToggle');
+  const topTimerEl = document.getElementById('topTimer');
+
+  // Sequence mode toggle and display
+  const sequenceToggle = document.getElementById('sequenceToggle');
+  const topSequenceEl = document.getElementById('topSequence');
+  // Track whether sequence mode is enabled.  In sequence mode the player
+  // must clear multiple colours in a specific order to complete the level.
+  let sequenceMode = false;
+  // Array of colours defining the current sequence.  When sequence mode
+  // is active this is populated at level start.
+  let sequenceTargets = [];
+  // Index into sequenceTargets indicating the current colour in the
+  // sequence the player must clear.
+  let sequenceIndex = 0;
+
+
+  // Track whether timer mode is enabled.  When true, each level starts
+  // a countdown timer that the player must beat.  The flag is initialised
+  // based on the checkbox state and persisted via the profile.
+  let timerMode = false;
+  timerMode = timerToggle && timerToggle.checked;
+  if(timerToggle){
+    timerToggle.addEventListener('change', () => {
+      timerMode = timerToggle.checked;
+      // Restart or stop the timer immediately when toggled
+      if(timerMode){
+        // Start a fresh timer if the game is already running and not paused
+        // Resetting timeRemaining here will occur in startTimer()
+        startTimer(true);
+      } else {
+        stopTimer();
+      }
+      saveProfile();
+      updateTopInfo();
+    });
+  }
+
+  // Initialise sequenceMode from the checkbox state.  Attach a listener to
+  // update the flag and regenerate the board when toggled.  When sequence
+  // mode changes we respawn the current level to reflect the new rules.
+  if(sequenceToggle){
+    sequenceMode = sequenceToggle.checked;
+    sequenceToggle.addEventListener('change', () => {
+      sequenceMode = sequenceToggle.checked;
+      // Regenerate the board for the current level.  Spawning will set up
+      // sequenceTargets and sequenceIndex as needed.  We preserve the
+      // current level, points and streak but reset the board and timer.
+      spawnSpheres();
+      setLevelBackground();
+      // Reset first click ignore so the immediate click isn't counted
+      firstClickIgnored = true;
+      ignoreNextCanvasClick = false;
+      // Reset streak and multipliers when changing modes
+      streak = 0;
+      comboMultiplier = 1;
+      streakEl.textContent = streak;
+      // Restart timer if necessary
+      stopTimer();
+      startTimer(true);
+      saveProfile();
+      // Update display elements
+      updateMasteryDisplay();
+      updateTopInfo();
+    });
+  }
+
+  // Timer variables.  Each level lasts 30 seconds when timer mode is active.
+  let timeRemaining = 30;
+  let timerInterval = null;
+
+  // =========================
+  // 📊 ACCURACY & ACHIEVEMENTS TRACKING
+  // =========================
+  // Count of all clicks made by the player and how many were correct.  Used
+  // to compute the overall click accuracy percentage.  These values are
+  // incremented in the click handler and persisted in the profile.
+  let totalClicks = 0;
+  let correctClicks = 0;
+
+  // Track unlocked achievements.  Each key corresponds to a milestone with
+  // criteria defined below.  When a condition is met the key is set to
+  // true and the achievements display is refreshed.  Achievements are
+  // persisted in the profile so progress is saved across sessions.
+  let achievements = {
+    firstScore: false,     // Score at least 100 points in one session
+    streakMaster: false,   // Achieve a streak of 10 correct hits
+    levelTen: false,       // Reach level 10
+    sequencePro: false,    // Complete a sequence in sequence mode
+    timerChampion: false   // Finish a level with ≥10 seconds left (timer mode)
+  };
+  // Metadata for achievements: provides a human‑readable title and
+  // description for each milestone.  Used when rendering the achievements
+  // section and when announcing unlocked achievements.
+  const achievementsInfo = {
+    firstScore:  { title: 'Point Novice',    description: 'Score 100 points in one run' },
+    streakMaster:{ title: 'Streak Master',   description: 'Reach a streak of 10' },
+    levelTen:    { title: 'Level Ten',       description: 'Advance to level 10' },
+    sequencePro: { title: 'Sequence Pro',    description: 'Complete a sequence in Sequence Mode' },
+    timerChampion:{ title: 'Timer Champion', description: 'Finish a level with ≥10 seconds remaining (Timer Mode)' }
+  };
+
+  // Map base colours to single‑letter symbols for colour‑blind mode.  When
+  // enabled these letters are drawn on each sphere to provide a non‑colour
+  // cue.  Extended colours are mapped back to their base hue via
+  // colorSoundMap.  If a colour is missing from this map its first
+  // character is used as a fallback.
+  const colorSymbolsMap = {
+    Red: 'R', Green: 'G', Blue: 'B', Yellow: 'Y', Orange: 'O', Purple: 'P', Cyan: 'C'
+  };
+
+  // Colour‑blind mode toggle and state.  When enabled, a letter symbol is
+  // drawn on each sphere to aid players with colour vision deficiencies.
+  const colorBlindToggle = document.getElementById('colorBlindToggle');
+  let colorBlindMode = false;
+  // Initialise colour‑blind mode from the checkbox state
+  colorBlindMode = colorBlindToggle && colorBlindToggle.checked;
+  if(colorBlindToggle){
+    colorBlindToggle.addEventListener('change', () => {
+      colorBlindMode = colorBlindToggle.checked;
+      // Save the setting and redraw to apply symbols
+      saveProfile();
+      drawSpheres();
+    });
+  }
+
+  // Top info bar elements
+  const topPlayerEl = document.getElementById('topPlayer');
+  const topHighScoreEl = document.getElementById('topHighScore');
+  const topAccuracyEl = document.getElementById('topAccuracy');
+  const topTargetColorEl = document.getElementById('topTargetColor');
+
+  // --- Sound settings
+  // Track whether sounds are enabled.  This is initialized from the
+  // soundToggle checkbox and updated whenever the user changes it.
+  let soundOn = soundToggle.checked;
+  // Whenever the toggle changes, update the flag and persist the setting
+  soundToggle.addEventListener('change', () => {
+    soundOn = soundToggle.checked;
+    saveProfile();
+  });
+
+  // --- Hard mode toggle
+  // Reference to the hard mode checkbox in the UI.  Hard mode uses an
+  // expanded palette of subtle colours to challenge the player's
+  // perceptual skills.  The initial state of hard mode is taken from the
+  // checkbox and updated via this event listener.  Any change triggers
+  // a palette swap and profile save.
+  const hardModeToggle = document.getElementById('hardModeToggle');
+  // Declare the hardMode flag before assigning to it.  Without this
+  // declaration the assignment below would attempt to set a variable that
+  // hasn't been initialised yet, causing a ReferenceError.  Defining
+  // hardMode here makes it available throughout the script.
+  let hardMode = false;
+  // Initialise hardMode from the checkbox state
+  hardMode = hardModeToggle && hardModeToggle.checked;
+  if(hardModeToggle){
+    hardModeToggle.addEventListener('change', () => {
+      hardMode = hardModeToggle.checked;
+      applyHardMode();
+      saveProfile();
+    });
+  }
+
+  // --- Stroop mode toggle
+  // Reference to the Stroop toggle checkbox.  Stroop mode displays
+  // mismatched colour names on the spheres, forcing the player to rely on
+  // the colours themselves.  Declare stroopMode before using it.
+  const stroopToggle = document.getElementById('stroopToggle');
+  let stroopMode = false;
+  stroopMode = stroopToggle && stroopToggle.checked;
+  if(stroopToggle){
+    stroopToggle.addEventListener('change', () => {
+      stroopMode = stroopToggle.checked;
+      applyStroopLabels();
+      saveProfile();
+    });
+  }
+
+  /**
+   * Play the given audio clip if sounds are enabled.  This helper ensures
+   * all game sounds are short and sweet by applying a higher playback rate
+   * and a moderate volume.  The audio is rewound to the start before
+   * playing so that rapid successive hits always trigger a sound.
+   * @param {HTMLAudioElement} audio The audio element to play
+   * @param {number} rate Optional playback rate (defaults to 2.0x)
+   * @param {number} vol Optional volume (defaults to 0.5)
+   */
+  function playSound(audio, rate = 2.0, vol = 0.5){
+    if(!soundOn) return;
+    // Apply playback rate and volume for a snappier effect
+    audio.playbackRate = rate;
+    audio.volume = vol;
+    try {
+      audio.currentTime = 0;
+      audio.play();
+    } catch(err){
+      // Ignore playback errors (e.g. if user hasn't interacted with page yet)
+    }
+  }
+
+  // Parameter controlling morph intensity (0=circular, 1=polygonal). Updated on slider input.
+  let morphValue = parseFloat(morphSlider.value);
+  morphSlider.addEventListener('input', ()=>{
+    morphValue = parseFloat(morphSlider.value);
+  });
+
+  // =========================
+  // 🎨 COLOUR PALETTES FOR TRAINING
+  // =========================
+  // Base colour list used in normal mode.  These are the primary hues that
+  // most players will recognise easily.  When hard mode is disabled, the
+  // colours array will reference this list.
+  const baseColorsList = ['Red','Green','Blue','Yellow','Orange','Purple','Cyan'];
+  // Extended palette used when hard mode is enabled.  Each entry here is a
+  // valid CSS colour name that represents a subtler shade of one of the base
+  // hues.  This palette challenges players to distinguish between similar
+  // colours, training their perception and recall.  Colours are grouped by
+  // their base hue for clarity.
+  const hardColorsList = [
+    'LightCoral','Crimson','Tomato','Salmon',        // reds
+    'LimeGreen','SeaGreen','ForestGreen','Olive',    // greens
+    'LightSkyBlue','DodgerBlue','RoyalBlue','SteelBlue', // blues
+    'Khaki','Gold','GoldenRod','DarkKhaki',          // yellows/golds
+    'LightSalmon','DarkOrange','Coral','OrangeRed',  // oranges
+    'Plum','MediumOrchid','MediumPurple','SlateBlue',// purples
+    'LightCyan','Turquoise','MediumTurquoise','DarkCyan'  // cyans
+  ];
+  // Map subtle colours back to their base hue for sound assignment.  This
+  // ensures that even when hard mode is enabled, the short and sharp sound
+  // effects still correspond to the underlying colour family.  If a colour
+  // isn't listed here, it falls back to itself.
+  const colorSoundMap = {
+    LightCoral: 'Red', Crimson: 'Red', Tomato: 'Red', Salmon: 'Red',
+    LimeGreen: 'Green', SeaGreen: 'Green', ForestGreen: 'Green', Olive: 'Green',
+    LightSkyBlue: 'Blue', DodgerBlue: 'Blue', RoyalBlue: 'Blue', SteelBlue: 'Blue',
+    Khaki: 'Yellow', Gold: 'Yellow', GoldenRod: 'Yellow', DarkKhaki: 'Yellow',
+    LightSalmon: 'Orange', DarkOrange: 'Orange', Coral: 'Orange', OrangeRed: 'Orange',
+    Plum: 'Purple', MediumOrchid: 'Purple', MediumPurple: 'Purple', SlateBlue: 'Purple',
+    LightCyan: 'Cyan', Turquoise: 'Cyan', MediumTurquoise: 'Cyan', DarkCyan: 'Cyan'
+  };
+
+  // =========================
+  // ✅ GAME STATE (DECLARE FIRST)
+  // =========================
+  let points = 0;               // <-- fixed init
+  let level = 1;
+  let streak = 0;
+  let spheres = [];
+  let targetColor = 'Red';
+  // The current palette of colours used for spawning spheres.  Initially set to
+  // a copy of the base palette, but replaced by the extended palette when
+  // hard mode is enabled.  Using a mutable array allows us to swap the
+  // underlying palette without rewriting references throughout the code.
+  let colors = baseColorsList.slice();
+  let currentSpeed = 1;         // base speed unless user changes slider
+  let comboMultiplier = 1;      // combo multiplier
+  let mastery = {};             // per-color stats
+  colors.forEach(c => { mastery[c] = { correct: 0, wrong: 0 }; });
+
+  // Flag indicating whether hard mode is active.  In hard mode the game uses
+  // the extended palette to train subtle colour discrimination.  This flag is
+  // persisted in the user's profile settings.
+  // The hardMode flag is declared and initialised earlier near the hardModeToggle setup.
+  // let hardMode = false;
+
+  // Count of normal (non-bonus) spheres remaining on the current level.  This
+  // value is set whenever a new set of spheres is spawned and decremented
+  // whenever the player removes spheres by hitting the target color.  Using
+  // this counter instead of relying on spheres.length prevents accidental
+  // level-ups when the spheres array is briefly empty (e.g. during the first
+  // click or initial spawn).  When this count reaches zero, the level is
+  // completed and a new one will be started.
+  let targetsRemaining = 0;
+
+  // =========================
+  // 📸 LEVEL BACKGROUND IMAGES
+  // =========================
+  // List of image filenames to cycle through as level backgrounds.  These
+  // files reside in the same directory as the HTML file.  When the level
+  // changes (including on game start), the background will change to the
+  // corresponding image.  Additional images can be added to this array.
+  const backgroundImages = ['bg1.png','bg2.png','bg3.png'];
+  function setLevelBackground(){
+    const idx = (level - 1) % backgroundImages.length;
+    const src = backgroundImages[idx];
+    // Use background-image CSS to set the image.  Use cover to fill the area.
+    gameContainer.style.backgroundImage = `url('${src}')`;
+    gameContainer.style.backgroundSize = 'cover';
+    gameContainer.style.backgroundPosition = 'center';
+  }
+
+  // Flag to ignore the very first click after starting a new game.  Without this,
+  // the initial click could inadvertently trigger a level-up or board reset if
+  // click detection runs before the spheres are fully initialized.  After the
+  // first click is ignored, normal gameplay resumes.
+  let firstClickIgnored = false;
+  // Some browsers propagate the click on the Start button through to the canvas,
+  // causing an immediate canvas click right after starting a new game.  Use
+  // this flag to ignore exactly one such spurious canvas click after the
+  // Start Game button is pressed.  The flag is set in the start handler and
+  // reset in the canvas click handler.
+  let ignoreNextCanvasClick = false;
+  // keep high scores
+  const HIGH_SCORES_KEY = 'fantasiaHighScores';
+  let isPaused = false;
+
+  // =========================
+  // ✨ PARTICLES & BACKGROUND
+  // =========================
+  // Particles array for confetti/explosion effects on correct hits and bonus collection.
+  const particles = [];
+  // Spawn a burst of particles at (x, y) with the given color. Particles get random
+  // velocities and fade out over time.
+  function spawnParticles(x, y, color){
+    // Create between 12 and 20 particles per burst
+    const count = 12 + Math.floor(Math.random() * 8);
+    for(let i=0;i<count;i++){
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 2 + Math.random() * 2;
+      const radius = 2 + Math.random() * 3;
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        r: radius,
+        color,
+        life: 60 // frames of life
+      });
+    }
+  }
+  function updateParticles(){
+    for(let i=particles.length-1;i>=0;i--){
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      // apply slight gravity and friction
+      p.vy += 0.05;
+      p.vx *= 0.98;
+      p.vy *= 0.98;
+      p.life--;
+      if(p.life <= 0){ particles.splice(i,1); continue; }
+    }
+  }
+  function drawParticles(){
+    for(const p of particles){
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      // Fade out based on remaining life
+      const alpha = Math.max(0, p.life / 60);
+      // Use the same color but with fading alpha; assume color names map to CSS color
+      ctx.fillStyle = parseColorWithAlpha(p.color, alpha);
+      ctx.fill();
+    }
+  }
+  // Helper to convert named colors to rgba strings with alpha.  For standard color
+  // names we rely on CSS; we draw a temporary element to compute the RGB values.
+  const colorCache = {};
+  function parseColorWithAlpha(name, alpha){
+    // If already cached with this alpha, return directly
+    const key = name + ':' + alpha;
+    if(colorCache[key]) return colorCache[key];
+    // Create a dummy canvas to convert color names to RGB
+    const temp = document.createElement('canvas');
+    temp.width = temp.height = 1;
+    const tmpCtx = temp.getContext('2d');
+    tmpCtx.fillStyle = name;
+    // fill and read back the color
+    tmpCtx.fillRect(0,0,1,1);
+    const data = tmpCtx.getImageData(0,0,1,1).data;
+    const rgba = `rgba(${data[0]},${data[1]},${data[2]},${alpha})`;
+    colorCache[key] = rgba;
+    return rgba;
+  }
+  // Dynamic gradient background hues.  These values rotate slowly to create a
+  // continuously changing gradient on the game container.
+  let bgHue1 = 0;
+  let bgHue2 = 180;
+  function updateBackground(){
+    bgHue1 = (bgHue1 + 0.08) % 360;
+    bgHue2 = (bgHue2 + 0.05) % 360;
+    const color1 = `hsl(${bgHue1},60%,92%)`;
+    const color2 = `hsl(${bgHue2},60%,96%)`;
+    gameContainer.style.background = `linear-gradient(45deg, ${color1}, ${color2})`;
+  }
+
+  // =========================
+  // ⏱️ TIMER MODE UTILITIES
+  // =========================
+  /**
+   * Start the countdown timer.  When reset is true or the current
+   * timeRemaining has expired, the timer is initialised to 30 seconds.
+   * The timer ticks once per second, decreasing the remaining time
+   * unless the game is paused.  When time expires, handleTimeOut() is
+   * invoked and the timer is cleared.  The timer only runs when
+   * timerMode is enabled; otherwise it does nothing.
+   * @param {boolean} reset Whether to reset the timer to full duration
+   */
+  function startTimer(reset = true){
+    // Always stop any existing interval first
+    stopTimer();
+    if(!timerMode) return;
+    // Initialise timeRemaining when requested or if expired
+    if(reset || timeRemaining <= 0){
+      timeRemaining = 30;
+    }
+    // Immediately update the top bar to show the starting time
+    updateTopInfo();
+    timerInterval = setInterval(() => {
+      // Do not tick down while paused
+      if(isPaused) return;
+      timeRemaining -= 1;
+      if(timeRemaining <= 0){
+        stopTimer();
+        handleTimeOut();
+        return;
+      }
+      updateTopInfo();
+    }, 1000);
+  }
+
+  /**
+   * Stop the countdown timer and clear the interval.  The remaining time
+   * is preserved so it can be resumed later if needed.
+   */
+  function stopTimer(){
+    if(timerInterval){
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+  }
+
+  /**
+   * Handle the event when the timer runs out.  This ends the current
+   * level and penalises the player before respawning a new board.  The
+   * level number remains the same.  Points are reduced by 10 (to a
+   * minimum of zero) and streak resets.  A bonus message is shown and
+   * neutral sound plays.  After the board is respawned, the timer is
+   * restarted if timer mode is still active.
+   */
+  function handleTimeOut(){
+    // Show a special message for timeout
+    showBonus("⏱️ Time's up!", 'wrong');
+    // Play neutral sound effect
+    playSound(neutralSound, 2.0, 0.5);
+    // Penalise points and reset streak and combo
+    points = Math.max(0, points - 10);
+    streak = 0;
+    comboMultiplier = 1;
+    pointsEl.textContent = points;
+    streakEl.textContent = streak;
+    // Persist the score changes
+    saveProfile();
+    // Immediately respawn the current level without advancing
+    spawnSpheres();
+    setLevelBackground();
+    firstClickIgnored = true;
+    drawSpheres();
+    updateMasteryDisplay();
+    // Restart the timer if timer mode remains enabled
+    startTimer(true);
+  }
+
+  // --- Validation helpers to harden against undefined spheres ---
+  function isValidSphere(obj){
+    return !!obj && typeof obj.x==='number' && typeof obj.y==='number' && typeof obj.r==='number' &&
+           typeof obj.vx==='number' && typeof obj.vy==='number' && typeof obj.color==='string' &&
+           !Number.isNaN(obj.x) && !Number.isNaN(obj.y) && !Number.isNaN(obj.r);
+  }
+  function sanitizeSpheres(){ spheres = spheres.filter(isValidSphere); }
+
+  // --- Sounds ---
+  const colorSounds = {
+    Red: new Audio("https://actions.google.com/sounds/v1/cartoon/clang.ogg"),
+    Green: new Audio("https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg"),
+    Blue: new Audio("https://actions.google.com/sounds/v1/cartoon/slide_whistle.ogg"),
+    Yellow: new Audio("https://actions.google.com/sounds/v1/cartoon/metal_twang.ogg"),
+    Orange: new Audio("https://actions.google.com/sounds/v1/cartoon/siren_whistle.ogg"),
+    Purple: new Audio("https://actions.google.com/sounds/v1/cartoon/pop.ogg"),
+    Cyan: new Audio("https://actions.google.com/sounds/v1/cartoon/wood_click.ogg")
+  };
+  const neutralSound = new Audio("https://actions.google.com/sounds/v1/cartoon/woodpecker_pecking.ogg");
+  const levelUpSound = new Audio("https://actions.google.com/sounds/v1/cartoon/slide_whistle_to_drum_hit.ogg");
+  const bounceSound = new Audio("https://actions.google.com/sounds/v1/cartoon/bubble_pop.ogg");
+  let lastBounceTime = 0;
+
+  // =========================
+  // 👤 USER & PERSISTENCE
+  // =========================
+  // Player selection element for switching between profiles
+  const playerSelect = document.getElementById('playerSelect');
+  const nameInput = document.getElementById('nameInput');
+  const saveNameBtn = document.getElementById('saveNameBtn');
+
+  const ACTIVE_USER_KEY = 'fantasiaActiveUser';
+  const USERS_KEY = 'fantasiaUsers';
+  const profileKey = (name)=>`fantasiaProfile:${name}`;
+
+  function getUsers(){
+    try { return JSON.parse(localStorage.getItem(USERS_KEY)) || []; } catch { return []; }
+  }
+  function setUsers(arr){ localStorage.setItem(USERS_KEY, JSON.stringify([...new Set(arr)])); }
+
+  // Populate the player selection drop-down with the list of known users.  If
+  // the active user is not in the list, it will be added temporarily so it
+  // appears in the drop-down.  After populating, the selected option is set
+  // to the active user.
+  function populateUserSelect(){
+    if(!playerSelect) return;
+    const users = getUsers();
+    playerSelect.innerHTML = '';
+    // Ensure each user appears once
+    const uniqueUsers = [...new Set(users)];
+    if(activeUser && !uniqueUsers.includes(activeUser)){
+      uniqueUsers.push(activeUser);
+    }
+    uniqueUsers.forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      playerSelect.appendChild(opt);
+    });
+    if(activeUser){
+      playerSelect.value = activeUser;
+    }
+  }
+
+  function loadHighScores(){
+    try { return JSON.parse(localStorage.getItem(HIGH_SCORES_KEY)) || []; } catch { return []; }
+  }
+  function saveHighScores(arr){ localStorage.setItem(HIGH_SCORES_KEY, JSON.stringify(arr)); }
+  function updateHighScores(user, score){
+    if(!user) return;
+    const list = loadHighScores();
+    const idx = list.findIndex(e => e.user === user);
+    if(idx >= 0){
+      if(score > list[idx].score) list[idx].score = score;
+    } else {
+      list.push({user, score});
+    }
+    list.sort((a,b) => b.score - a.score);
+    if(list.length > 5) list.length = 5;
+    saveHighScores(list);
+  }
+  function updateHighScoreDisplay(){
+    const list = loadHighScores();
+    highScoresDiv.innerHTML = '';
+    if(list.length === 0){
+      highScoresDiv.innerHTML = '<div>No scores yet.</div>';
+      return;
+    }
+    list.forEach((entry, i) => {
+      const isActive = entry.user === activeUser;
+      highScoresDiv.innerHTML += `<div${isActive ? ' style="font-weight:bold;"' : ''}>${i+1}. ${entry.user}: ${entry.score}</div>`;
+    });
+    // Also update the top bar with the highest score for the active user
+    updateTopInfo();
+  }
+
+  /**
+   * Update the top information bar with the current player name, that player's
+   * highest recorded score, and the current target colour.  Reads from
+   * local high score data and the global targetColor variable.  Called
+   * whenever the active user or scores change, or when a new colour is
+   * selected.  Gracefully handles missing elements.
+   */
+  function updateTopInfo(){
+    // Update player name
+    if(topPlayerEl){
+      topPlayerEl.textContent = activeUser || '';
+    }
+    // Compute the highest score for the active user
+    let maxScore = 0;
+    try {
+      const list = loadHighScores();
+      for(const entry of list){
+        if(entry.user === activeUser && typeof entry.score === 'number' && entry.score > maxScore){
+          maxScore = entry.score;
+        }
+      }
+    } catch(e){}
+    if(topHighScoreEl){
+      topHighScoreEl.textContent = 'High Score: ' + maxScore;
+    }
+    // Update click accuracy display.  Accuracy is defined as the ratio of
+    // correct hits to total clicks, expressed as a percentage.  If no
+    // clicks have been made yet, display 100% by convention.
+    if(topAccuracyEl){
+      const acc = (totalClicks > 0) ? Math.round((correctClicks / totalClicks) * 100) : 100;
+      topAccuracyEl.textContent = 'Acc: ' + acc + '%';
+    }
+    // Update the target colour display
+    if(topTargetColorEl){
+      const colourName = targetColor || '';
+      const lower = colourName.toLowerCase();
+      topTargetColorEl.innerHTML = `<span class="top-color-dot" style="background:${lower};"></span>${colourName}`;
+    }
+    // Update the timer display.  Show only when timer mode is enabled.
+    if(topTimerEl){
+      if(timerMode){
+        topTimerEl.style.display = '';
+        topTimerEl.textContent = 'Time: ' + Math.ceil(timeRemaining);
+      } else {
+        topTimerEl.style.display = 'none';
+      }
+    }
+
+    // Update the sequence display.  Show the sequence of colours to clear
+    // when sequence mode is active.  Each colour is represented by a dot
+    // with a border.  The current target in the sequence is highlighted
+    // with a thicker border.  Hide this element when sequence mode is off
+    // or there is no sequence defined.
+    if(topSequenceEl){
+      if(sequenceMode && Array.isArray(sequenceTargets) && sequenceTargets.length > 0){
+        topSequenceEl.style.display = '';
+        let html = 'Seq: ';
+        sequenceTargets.forEach((c, idx) => {
+          const lower = c.toLowerCase();
+          const borderWidth = (idx === sequenceIndex ? 3 : 1);
+          html += `<span class="top-color-dot" style="background:${lower}; border:${borderWidth}px solid #000; margin-right:2px;"></span>`;
+        });
+        topSequenceEl.innerHTML = html;
+      } else {
+        topSequenceEl.style.display = 'none';
+      }
+    }
+  }
+
+  function saveProfile(){
+    if(!activeUser) return;
+    const data = {
+      points, level, streak, comboMultiplier,
+      mastery,
+      // Persist click statistics and achievements so they survive page reloads
+      totalClicks, correctClicks,
+      achievements,
+      settings: { speed: currentSpeed, showNames: showNamesCheckbox.checked, panelOpen, soundOn, hardMode, stroopMode, timerMode, sequenceMode, colorBlindMode }
+    };
+    localStorage.setItem(profileKey(activeUser), JSON.stringify(data));
+    localStorage.setItem(ACTIVE_USER_KEY, activeUser);
+    // update high score when saving profile
+    updateHighScores(activeUser, points);
+    updateHighScoreDisplay();
+    // Refresh the top info bar after saving
+    updateTopInfo();
+  }
+
+  function loadProfile(name){
+    const raw = localStorage.getItem(profileKey(name));
+    if(!raw) return false;
+    try {
+      const data = JSON.parse(raw);
+      points = typeof data.points === 'number' ? data.points : 0;
+      level = typeof data.level === 'number' ? data.level : 1;
+      streak = typeof data.streak === 'number' ? data.streak : 0;
+      comboMultiplier = typeof data.comboMultiplier === 'number' ? data.comboMultiplier : 1;
+      mastery = data.mastery && typeof data.mastery === 'object' ? data.mastery : mastery;
+      if(data.settings){
+        currentSpeed = typeof data.settings.speed === 'number' ? data.settings.speed : currentSpeed;
+        if(typeof data.settings.showNames === 'boolean') showNamesCheckbox.checked = data.settings.showNames;
+        if(typeof data.settings.panelOpen === 'boolean') panelOpen = data.settings.panelOpen;
+        // Load sound preference and update checkbox/flag
+        if(typeof data.settings.soundOn === 'boolean'){
+          soundOn = data.settings.soundOn;
+          soundToggle.checked = soundOn;
+        }
+        // Load hard mode setting and update palette
+        if(typeof data.settings.hardMode === 'boolean'){
+          hardMode = data.settings.hardMode;
+          if(hardModeToggle) hardModeToggle.checked = hardMode;
+          applyHardMode();
+        }
+        // Load stroop mode setting and update labels
+        if(typeof data.settings.stroopMode === 'boolean'){
+          stroopMode = data.settings.stroopMode;
+          if(stroopToggle) stroopToggle.checked = stroopMode;
+          applyStroopLabels();
+        }
+        // Load timer mode setting and update timer flag
+        if(typeof data.settings.timerMode === 'boolean'){
+          timerMode = data.settings.timerMode;
+          if(timerToggle) timerToggle.checked = timerMode;
+        }
+        // Load sequence mode setting and update sequence flag
+        if(typeof data.settings.sequenceMode === 'boolean'){
+          sequenceMode = data.settings.sequenceMode;
+          if(sequenceToggle) sequenceToggle.checked = sequenceMode;
+        }
+        // Load colour‑blind mode setting and update flag
+        if(typeof data.settings.colorBlindMode === 'boolean'){
+          colorBlindMode = data.settings.colorBlindMode;
+          if(colorBlindToggle) colorBlindToggle.checked = colorBlindMode;
+        }
+      }
+      // Restore click statistics if present
+      if(typeof data.totalClicks === 'number') totalClicks = data.totalClicks;
+      if(typeof data.correctClicks === 'number') correctClicks = data.correctClicks;
+      // Restore achievements if present
+      if(data.achievements && typeof data.achievements === 'object'){
+        achievements = Object.assign({}, achievements, data.achievements);
+      }
+      // Update UI
+      pointsEl.textContent = points; levelEl.textContent = level; streakEl.textContent = streak;
+      speedSlider.value = String(currentSpeed);
+      resizeCanvas();
+      updateMasteryDisplay();
+      updateHighScoreDisplay();
+      // Update achievements and accuracy displays after loading a profile
+      updateAchievementsDisplay();
+      updateAccuracyDisplay();
+      // Update the top info bar to reflect the loaded user and target colour
+      updateTopInfo();
+      return true;
+    } catch(e){ return false; }
+  }
+
+  // On first load, default to a "Guest" profile if no active user is
+  // recorded.  This ensures there is always a valid profile to associate
+  // with game progress and avoids an empty user list that would prevent
+  // the Start Game button from functioning.  When a new user is added, the
+  // activeUser value will be updated accordingly.
+  let activeUser = localStorage.getItem(ACTIVE_USER_KEY) || 'Guest';
+  if(activeUser){
+    // Update selection drop-down to the active user
+    if(playerSelect){
+      populateUserSelect();
+      playerSelect.value = activeUser;
+    }
+    nameInput.value = activeUser;
+    const ok = loadProfile(activeUser);
+    if(!ok) saveProfile();
+  }
+  // If no active user exists, still populate the user selection drop-down
+  if(!activeUser){
+    populateUserSelect();
+  }
+
+  saveNameBtn.addEventListener('click', ()=>{
+    const name = nameInput.value.trim();
+    if(!name) return;
+    activeUser = name;
+    // Update drop-down to show the newly added user
+    populateUserSelect();
+    playerSelect.value = activeUser;
+    const users = getUsers(); users.push(activeUser); setUsers(users);
+    if(!loadProfile(activeUser)) saveProfile();
+    // Update top info after adding a new user and switching
+    updateTopInfo();
+  });
+
+  // When the player selects a different user from the drop-down, switch to
+  // that profile.  The profile will be loaded if it exists; otherwise a
+  // fresh profile will be created on the next save.
+  if(playerSelect){
+    playerSelect.addEventListener('change', () => {
+      const name = playerSelect.value;
+      if(!name) return;
+      activeUser = name;
+      nameInput.value = name;
+      if(!loadProfile(name)) saveProfile();
+      // Update top bar when switching users
+      updateTopInfo();
+    });
+  }
+
+
+  window.addEventListener('beforeunload', saveProfile);
+
+  // --- Helpers ---
+  function updateMasteryDisplay(){
+    masteryEl.innerHTML = '';
+    for(const c of colors){
+      const score = (mastery[c]?.correct||0) - (mastery[c]?.wrong||0);
+      masteryEl.innerHTML += `<div><span class="history-color" style="background:${c.toLowerCase()}"></span>${c}: ${score} (✔${mastery[c]?.correct||0}/✖${mastery[c]?.wrong||0})</div>`;
+    }
+  }
+
+  function chooseTargetColor(){
+    // choose among remaining normal spheres, ignore bonus spheres
+    const remainingColors = [...new Set(spheres.filter(s => isValidSphere(s) && !s.isBonus).map(s => s.color))];
+    if(remainingColors.length === 0) return colors[Math.floor(Math.random()*colors.length)];
+    return remainingColors[Math.floor(Math.random()*remainingColors.length)];
+  }
+
+  /**
+   * Swap between the base and extended colour palettes based on the hardMode flag.
+   * When enabling hard mode, the colours array is replaced with a copy of the
+   * extended palette; when disabling hard mode, the base palette is restored.
+   * Mastery statistics for colours present in both palettes are preserved.  Any
+   * colours that are no longer part of the active palette have their stats
+   * hidden but not deleted, so switching back restores them.  After changing
+   * the palette, the mastery display is updated and, if necessary, the
+   * current board is regenerated to avoid having spheres with invalid colours.
+   */
+  function applyHardMode(){
+    // Swap the colours array to the appropriate palette
+    colors = hardMode ? hardColorsList.slice() : baseColorsList.slice();
+    // Build a new mastery object containing only colours in the active palette
+    const newMastery = {};
+    colors.forEach(col => {
+      if(mastery[col]) newMastery[col] = mastery[col];
+      else newMastery[col] = {correct: 0, wrong: 0};
+    });
+    mastery = newMastery;
+    // Update the mastery section of the UI
+    updateMasteryDisplay();
+    // Check if any current spheres have colours not in the active palette
+    const invalid = spheres.some(s => isValidSphere(s) && !s.isBonus && !colors.includes(s.color));
+    if(invalid){
+      // Reset streak and multipliers when regenerating the board
+      streak = 0;
+      comboMultiplier = 1;
+      streakEl.textContent = streak;
+      // Repopulate spheres using the new palette but keep the current level
+      spawnSpheres();
+      setLevelBackground();
+      // Restart the timer when regenerating due to palette change
+      stopTimer();
+      startTimer(true);
+      updateTopInfo();
+    }
+    // When the palette changes, update the labels used in Stroop mode to match
+    // the new palette.  This ensures mismatched names are chosen from the
+    // currently active colours.
+    applyStroopLabels();
+  }
+
+  /**
+   * Assign textual labels to each sphere based on the current Stroop mode
+   * setting.  When Stroop mode is enabled, each normal sphere (non bonus)
+   * receives a random colour name from the active palette that is *not* its
+   * actual colour.  This introduces a cognitive conflict similar to the
+   * Stroop effect, training players to focus on the colour rather than the
+   * written word.  When Stroop mode is disabled, each sphere's label is set
+   * to its actual colour.  Bonus stars are left unlabeled.
+   */
+  function applyStroopLabels(){
+    for(let i=0;i<spheres.length;i++){
+      const s = spheres[i];
+      if(!isValidSphere(s) || s.isBonus) continue;
+      if(stroopMode){
+        if(colors.length > 1){
+          let randomName;
+          do {
+            randomName = colors[Math.floor(Math.random() * colors.length)];
+          } while(randomName === s.color);
+          s.label = randomName;
+        } else {
+          s.label = s.color;
+        }
+      } else {
+        s.label = s.color;
+      }
+    }
+  }
+
+  // --- Utility for drawing polygons with rotation ---
+  function drawPolygon(x, y, radius, sides, angle, color){
+    if(sides < 3) sides = 3;
+    ctx.beginPath();
+    for(let i=0; i<sides; i++){
+      const theta = (i / sides) * 2 * Math.PI + angle;
+      const px = x + radius * Math.cos(theta);
+      const py = y + radius * Math.sin(theta);
+      if(i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = 'black';
+    ctx.stroke();
+  }
+  // Utility for drawing star shapes
+  function drawStar(x, y, outerR, innerR, spikes, angle, color){
+    ctx.beginPath();
+    for(let i=0; i<spikes*2; i++){
+      const r = (i % 2 === 0) ? outerR : innerR;
+      const theta = angle + (i * Math.PI) / spikes;
+      const px = x + r * Math.cos(theta);
+      const py = y + r * Math.sin(theta);
+      if(i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.strokeStyle = 'black';
+    ctx.stroke();
+  }
+
+  // --- Spawning (base radius 40, scaling with level) ---
+  function spawnSpheres(count){
+    // When count is undefined, compute based on level: increase difficulty gradually
+    const spawnCount = typeof count === 'number' ? count : Math.min(50, 10 + (level - 1) * 5);
+    spheres = [];
+    // Refresh accuracy display at the start of a spawn.  This ensures the UI
+    // reflects current click statistics whenever the board is regenerated.
+    updateAccuracyDisplay();
+    // Compute a base radius that scales with the canvas dimensions.  Smaller
+    // screens produce smaller spheres, while larger screens retain a
+    // comfortable size.  Clamp the radius to a sensible range to avoid
+    // extremely tiny or huge spheres.
+    const minDim = Math.min(canvas.width, canvas.height);
+    let baseRadius = Math.round(minDim / 15);
+    baseRadius = Math.max(15, Math.min(50, baseRadius));
+
+    if(sequenceMode){
+      // --- Sequence mode spawning ---
+      // Choose up to three distinct colours for the sequence.  Use the
+      // available palette; if there are fewer than three colours (unlikely),
+      // use all of them.
+      sequenceTargets = [];
+      const seqCount = Math.min(3, colors.length);
+      while(sequenceTargets.length < seqCount){
+        const c = colors[Math.floor(Math.random() * colors.length)];
+        if(!sequenceTargets.includes(c)) sequenceTargets.push(c);
+      }
+      // Initialise sequence index and target colour
+      sequenceIndex = 0;
+      targetColor = sequenceTargets[0];
+      // Build a pool of colours ensuring at least one occurrence of each
+      // sequence colour.  The rest of the pool is filled with random colours.
+      const pool = [];
+      for(const c of sequenceTargets){ pool.push(c); }
+      while(pool.length < spawnCount){
+        pool.push(colors[Math.floor(Math.random() * colors.length)]);
+      }
+      // Shuffle the pool
+      for(let i = pool.length - 1; i > 0; i--){
+        const j = Math.floor(Math.random() * (i + 1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      // Create spheres from the colour pool
+      for(let i = 0; i < spawnCount; i++){
+        const color = pool[i];
+        const s = {
+          x: Math.random() * (canvas.width - 2 * baseRadius) + baseRadius,
+          y: Math.random() * (canvas.height - 2 * baseRadius) + baseRadius,
+          vx: (Math.random() < 0.5 ? -1 : 1),
+          vy: (Math.random() < 0.5 ? -1 : 1),
+          r: baseRadius,
+          baseR: baseRadius,
+          color,
+          sizePhase: Math.random() * Math.PI * 2,
+          rotationAngle: 0,
+          rotationSpeed: (Math.random() * 0.06 - 0.03),
+          sides: 12,
+          isBonus: false,
+          starSpikes: 0
+        };
+        if(isValidSphere(s)) spheres.push(s);
+      }
+      // Chance to spawn a bonus star (10% probability)
+      if(Math.random() < 0.1){
+        const starR = baseRadius * 1.3;
+        const star = {
+          x: Math.random() * (canvas.width - 2 * starR) + starR,
+          y: Math.random() * (canvas.height - 2 * starR) + starR,
+          vx: (Math.random() < 0.5 ? -1 : 1),
+          vy: (Math.random() < 0.5 ? -1 : 1),
+          r: starR,
+          baseR: starR,
+          color: 'Gold',
+          sizePhase: Math.random() * Math.PI * 2,
+          rotationAngle: 0,
+          rotationSpeed: (Math.random() * 0.06 - 0.03),
+          sides: 5,
+          isBonus: true,
+          starSpikes: 5
+        };
+        spheres.push(star);
+      }
+    } else {
+      // --- Normal spawning ---
+      // choose a random target color
+      const chosenColor = colors[Math.floor(Math.random() * colors.length)];
+      targetColor = chosenColor;
+      const targetIndex = Math.floor(Math.random() * spawnCount);
+      for(let i = 0; i < spawnCount; i++){
+        const color = (i === targetIndex) ? chosenColor : colors[Math.floor(Math.random() * colors.length)];
+        const s = {
+          x: Math.random() * (canvas.width - 2 * baseRadius) + baseRadius,
+          y: Math.random() * (canvas.height - 2 * baseRadius) + baseRadius,
+          vx: (Math.random() < 0.5 ? -1 : 1),
+          vy: (Math.random() < 0.5 ? -1 : 1),
+          r: baseRadius,
+          baseR: baseRadius,
+          color,
+          sizePhase: Math.random() * Math.PI * 2,
+          rotationAngle: 0,
+          rotationSpeed: (Math.random() * 0.06 - 0.03),
+          sides: 12,
+          isBonus: false,
+          starSpikes: 0
+        };
+        if(isValidSphere(s)) spheres.push(s);
+      }
+      // Chance to spawn a bonus star (10% probability)
+      if(Math.random() < 0.1){
+        const starR = baseRadius * 1.3;
+        const star = {
+          x: Math.random() * (canvas.width - 2 * starR) + starR,
+          y: Math.random() * (canvas.height - 2 * starR) + starR,
+          vx: (Math.random() < 0.5 ? -1 : 1),
+          vy: (Math.random() < 0.5 ? -1 : 1),
+          r: starR,
+          baseR: starR,
+          color: 'Gold',
+          sizePhase: Math.random() * Math.PI * 2,
+          rotationAngle: 0,
+          rotationSpeed: (Math.random() * 0.06 - 0.03),
+          sides: 5,
+          isBonus: true,
+          starSpikes: 5
+        };
+        spheres.push(star);
+      }
+    }
+    sanitizeSpheres();
+    // Assign labels for Stroop mode based on the current setting
+    applyStroopLabels();
+    // Update the remaining targets count: count only normal spheres (ignore bonus stars)
+    if(sequenceMode){
+      // Only count spheres of the current target colour in sequence mode
+      targetsRemaining = spheres.filter(sp => isValidSphere(sp) && !sp.isBonus && sp.color === targetColor).length;
+    } else {
+      targetsRemaining = spheres.filter(sp => isValidSphere(sp) && !sp.isBonus).length;
+    }
+    // Update hidden target colour element (used by logic) and top bar
+    targetColorEl.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${targetColor.toLowerCase()};border:1px solid #000;margin-right:6px;"></span>${targetColor}`;
+    // Refresh the top info bar and reassign Stroop labels
+    updateTopInfo();
+    saveProfile();
+  }
+
+  function drawSpheres(){
+    // Trailing effect: instead of fully clearing, paint a semi-transparent overlay
+    if(trailsCheckbox.checked){
+      ctx.fillStyle = 'rgba(238,238,238,0.25)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+    }
+    for(let i=0;i<spheres.length;i++){
+      const s = spheres[i];
+      if(!isValidSphere(s)) continue;
+      // Glow effect for target-colored normal spheres
+      if(!s.isBonus && s.color === targetColor){
+        // Create a radial gradient that fades outward
+        const glowR = s.r * 1.6;
+        const grad = ctx.createRadialGradient(s.x, s.y, s.r, s.x, s.y, glowR);
+        const glowColor = parseColorWithAlpha(s.color, 0.5);
+        grad.addColorStop(0, glowColor);
+        grad.addColorStop(1, parseColorWithAlpha(s.color, 0));
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, glowR, 0, Math.PI*2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+      }
+      if(s.isBonus){
+        // Create and store a Path2D for the star shape
+        const starPath = new Path2D();
+        for(let j=0; j<s.starSpikes*2; j++){
+          const rUse = (j % 2 === 0) ? s.r : (s.r * 0.5);
+          const theta = s.rotationAngle + (j * Math.PI) / s.starSpikes;
+          const px = s.x + rUse * Math.cos(theta);
+          const py = s.y + rUse * Math.sin(theta);
+          if(j === 0) starPath.moveTo(px, py);
+          else starPath.lineTo(px, py);
+        }
+        starPath.closePath();
+        s.path = starPath;
+        // Fill and stroke the star
+        ctx.fillStyle = '#FFD700';
+        ctx.fill(starPath);
+        ctx.strokeStyle = 'black';
+        ctx.stroke(starPath);
+        // Draw a star label for clarity
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.font = `${Math.max(14, s.r/3)}px Arial`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('★', s.x, s.y);
+      } else if(shapeMorphCheckbox.checked){
+        const minSides = 3;
+        const maxSides = 12;
+        const sidesCount = Math.round(minSides + (maxSides - minSides) * (1 - morphValue));
+        s.sides = sidesCount;
+        // Create and store a Path2D for the polygon
+        const polyPath = new Path2D();
+        for(let j=0; j<s.sides; j++){
+          const theta = (j / s.sides) * 2 * Math.PI + s.rotationAngle;
+          const px = s.x + s.r * Math.cos(theta);
+          const py = s.y + s.r * Math.sin(theta);
+          if(j === 0) polyPath.moveTo(px, py);
+          else polyPath.lineTo(px, py);
+        }
+        polyPath.closePath();
+        s.path = polyPath;
+        ctx.fillStyle = s.color;
+        ctx.fill(polyPath);
+        ctx.strokeStyle = 'black';
+        ctx.stroke(polyPath);
+      } else {
+        // Draw simple circle and store its path
+        const circPath = new Path2D();
+        circPath.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        s.path = circPath;
+        ctx.fillStyle = s.color;
+        ctx.fill(circPath);
+        ctx.strokeStyle = 'black';
+        ctx.stroke(circPath);
+      }
+      // Draw color names on top for normal spheres
+      if(showNamesCheckbox.checked && !s.isBonus){
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.font = `${Math.max(12, s.r/2)}px Arial`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        // When Stroop mode is enabled a mismatched label is stored on the sphere
+        const label = (typeof s.label === 'string') ? s.label : s.color;
+        ctx.fillText(label, s.x, s.y);
+      }
+      // Overlay a symbol for colour‑blind mode.  Uses the base hue of
+      // the colour to choose a letter from colorSymbolsMap.  Symbols are
+      // drawn in the top‑left corner of the sphere to avoid overlapping
+      // the main label.
+      if(colorBlindMode && !s.isBonus){
+        const base = colorSoundMap[s.color] || s.color;
+        const letter = colorSymbolsMap[base] || base.charAt(0);
+        const iconSize = Math.max(12, s.r/2);
+        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.font = `${iconSize}px Arial`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        // Position the symbol within the sphere bounds
+        ctx.fillText(letter, s.x - s.r + 4, s.y - s.r + 4);
+      }
+    }
+  }
+
+  /**
+   * Recompute the Path2D for each sphere based on its current position, radius,
+   * rotation and shape settings.  This ensures click detection always uses
+   * up-to-date geometry regardless of when the user clicks relative to the
+   * render loop.  We replicate the logic from drawSpheres() without
+   * performing any drawing operations.
+   */
+  function updatePaths(){
+    for(let i=0;i<spheres.length;i++){
+      const s = spheres[i];
+      if(!isValidSphere(s)) continue;
+      if(s.isBonus){
+        const starPath = new Path2D();
+        for(let j=0; j<s.starSpikes*2; j++){
+          const rUse = (j % 2 === 0) ? s.r : (s.r * 0.5);
+          const theta = s.rotationAngle + (j * Math.PI) / s.starSpikes;
+          const px = s.x + rUse * Math.cos(theta);
+          const py = s.y + rUse * Math.sin(theta);
+          if(j === 0) starPath.moveTo(px, py);
+          else starPath.lineTo(px, py);
+        }
+        starPath.closePath();
+        s.path = starPath;
+      } else if(shapeMorphCheckbox.checked){
+        const minSides = 3;
+        const maxSides = 12;
+        const sidesCount = Math.round(minSides + (maxSides - minSides) * (1 - morphValue));
+        s.sides = sidesCount;
+        const polyPath = new Path2D();
+        for(let j=0; j<s.sides; j++){
+          const theta = (j / s.sides) * 2 * Math.PI + s.rotationAngle;
+          const px = s.x + s.r * Math.cos(theta);
+          const py = s.y + s.r * Math.sin(theta);
+          if(j === 0) polyPath.moveTo(px, py);
+          else polyPath.lineTo(px, py);
+        }
+        polyPath.closePath();
+        s.path = polyPath;
+      } else {
+        const circPath = new Path2D();
+        circPath.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        s.path = circPath;
+      }
+    }
+  }
+
+  function updateSpheres(){
+    // Drop any invalid entries first to prevent undefined access
+    sanitizeSpheres();
+    // Background images are now handled separately when levels change; do not update gradient here
+    // Always update particles (they continue to fade out even when paused)
+    updateParticles();
+    // Skip sphere updates when paused
+    if(isPaused) return;
+    // Apply size variation, vibration and rotation updates before movement
+    for(let i=0;i<spheres.length;i++){
+      const s = spheres[i];
+      if(!isValidSphere(s)) continue;
+      // Size variation: only for normal spheres
+      if(sizeVarCheckbox.checked && !s.isBonus){
+        const amplitude = s.baseR * 0.3; // up to 30% size change
+        s.r = s.baseR + amplitude * Math.sin(s.sizePhase);
+        s.sizePhase += 0.05;
+      } else {
+        s.r = s.baseR;
+      }
+      // Vibration effect on mobile: jitter position slightly
+      if(vibrationCheckbox.checked && isMobileLayout()){
+        const jitter = 1.5;
+        s.x += (Math.random() - 0.5) * jitter;
+        s.y += (Math.random() - 0.5) * jitter;
+      }
+      // Rotation update for polygons and bonus stars
+      if(rotationCheckbox.checked){
+        s.rotationAngle += s.rotationSpeed;
+      }
+      // Ensure radius never becomes too small or negative
+      if(s.r < 10) s.r = 10;
+    }
+    // move & wall bounce
+    for(let i=0;i<spheres.length;i++){
+      const s = spheres[i];
+      if(!isValidSphere(s)) continue;
+      s.x += s.vx*currentSpeed;
+      s.y += s.vy*currentSpeed;
+      if(s.x - s.r < 0){ s.x = s.r; s.vx *= -1; }
+      if(s.x + s.r > canvas.width){ s.x = canvas.width - s.r; s.vx *= -1; }
+      if(s.y - s.r < 0){ s.y = s.r; s.vy *= -1; }
+      if(s.y + s.r > canvas.height){ s.y = canvas.height - s.r; s.vy *= -1; }
+    }
+    // sphere-sphere collisions (equal mass elastic)
+    for(let i=0;i<spheres.length;i++){
+      const a = spheres[i]; if(!isValidSphere(a)) continue;
+      for(let j=i+1;j<spheres.length;j++){
+        const b = spheres[j]; if(!isValidSphere(b)) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy), minDist = a.r + b.r;
+        if(dist>0 && dist<minDist){
+          const overlap = (minDist - dist)/2;
+          const nx = dx/dist, ny = dy/dist;
+          a.x -= nx*overlap; a.y -= ny*overlap; b.x += nx*overlap; b.y += ny*overlap;
+          const tx = -ny, ty = nx;
+          const v1n = a.vx*nx + a.vy*ny, v1t = a.vx*tx + a.vy*ty;
+          const v2n = b.vx*nx + b.vy*ny, v2t = b.vx*tx + b.vy*ty;
+          const v1nAfter = v2n, v2nAfter = v1n;
+          a.vx = v1nAfter*nx + v1t*tx; a.vy = v1nAfter*ny + v1t*ty;
+          b.vx = v2nAfter*nx + v2t*tx; b.vy = v2nAfter*ny + v2t*ty;
+          const s1 = Math.hypot(a.vx,a.vy)||1; a.vx/=s1; a.vy/=s1;
+          const s2 = Math.hypot(b.vx,b.vy)||1; b.vx/=s2; b.vy/=s2;
+          const now = performance.now();
+          if(now - lastBounceTime > 120){
+            // Use playSound helper for a gentler bounce with a slightly lower rate
+            playSound(bounceSound, 1.3, 0.5);
+            lastBounceTime = now;
+          }
+        }
+      }
+    }
+  }
+
+  canvas.addEventListener('click', (e)=>{
+    /*
+      Compute click position relative to the canvas's internal coordinate system.
+
+      Using clientX/clientY with getBoundingClientRect() can lead to subtle
+      inaccuracies if the canvas's CSS dimensions differ from its drawing
+      buffer dimensions or when transforms are applied. Instead we rely on
+      offsetX/offsetY (the coordinates of the event relative to the padding
+      box of the target element) and scale them to the drawing buffer size.
+
+      offsetX/Y already account for the element's positioning within the page.
+      We then multiply by the ratio of the drawing buffer dimensions to the
+      element's current clientWidth/clientHeight to get true pixel coordinates.
+    */
+    // Compute coordinates relative to the canvas's drawing buffer.  Use
+    // offsetX/Y which give the coordinates of the event relative to the
+    // padding box of the target element.  Scale them to the drawing buffer
+    // size by multiplying by the ratio of the internal resolution to the
+    // element's CSS dimensions.  This avoids issues with transforms and
+    // nested offsets encountered when using clientX/clientY.
+    // If the start button click propagated to the canvas, ignore this click once
+    if(ignoreNextCanvasClick){
+      ignoreNextCanvasClick = false;
+      return;
+    }
+    // Compute coordinates relative to the canvas's drawing buffer using clientX/clientY and the bounding rectangle.
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+    // If this is the very first click after a fresh game start, ignore it.
+    if(firstClickIgnored){
+      firstClickIgnored = false;
+      return;
+    }
+    // Increment click counters for accuracy.  Only count clicks after the
+    // initial ignored click has been handled.  Correct hits are tallied
+    // further down when a match is detected.
+    totalClicks++;
+    let hit = false;
+    // Iterate over spheres in reverse order so topmost spheres are processed first
+    for(let i = spheres.length - 1; i >= 0; i--){
+      const s = spheres[i];
+      if(!isValidSphere(s)) continue;
+      // Determine if the click is inside this sphere using simple distance check.
+      // This approach is more robust across different shapes and avoids
+      // reliance on Path2D hit testing, which has proven unreliable in some
+      // environments.  The check uses the current radius of the sphere,
+      // accounting for size variation and scaling.
+      const dx = x - s.x;
+      const dy = y - s.y;
+      const distSq = dx * dx + dy * dy;
+      if(distSq <= s.r * s.r){
+        // Bonus star clicked
+        if(s.isBonus){
+          points += 100;
+          showBonus('💫 BONUS! +100', 'level');
+          playSound(levelUpSound, 1.4, 0.6);
+          spawnParticles(s.x, s.y, 'Gold');
+          // remove the bonus from the sphere array
+          spheres.splice(i, 1);
+          sanitizeSpheres();
+          addHistory('★','Bonus');
+          saveProfile();
+          hit = true;
+          break;
+        }
+        // Normal sphere logic
+        if(s.color === targetColor){
+          streak++;
+          // Count a correct hit for accuracy tracking
+          correctClicks++;
+          comboMultiplier = 1 + Math.floor(streak/5);
+          const earned = (10 + (streak - 1) * 2) * comboMultiplier;
+          points += earned;
+          mastery[s.color] = mastery[s.color] || {correct:0, wrong:0};
+          mastery[s.color].correct++;
+          showBonus(`🎨 You nailed ${s.color}! Streak x${streak} • Combo x${comboMultiplier} (+${earned})`, 'correct');
+          // Play a short, sharp sound for the underlying colour family.  When
+          // hard mode is active the colour names may not match the keys in
+          // colorSounds, so map subtle shades back to their base hue.
+          {
+            const baseSoundKey = colorSoundMap[s.color] || s.color;
+            if(colorSounds[baseSoundKey]){
+              playSound(colorSounds[baseSoundKey]);
+            }
+          }
+          spawnParticles(s.x, s.y, s.color);
+          // count how many spheres of this color (excluding bonus) are about to be removed
+          const removedCount = spheres.filter(sp => isValidSphere(sp) && !sp.isBonus && sp.color === targetColor).length;
+          targetsRemaining -= removedCount;
+          // remove all spheres of the target colour (keep bonus stars)
+          spheres = spheres.filter(sp => isValidSphere(sp) && (sp.isBonus || sp.color !== targetColor));
+          sanitizeSpheres();
+          addHistory('✔', s.color);
+          saveProfile();
+          // In sequence mode we handle progression through the sequence below.
+          // For normal mode we choose a new random target if there are still
+          // spheres left.
+          if(!sequenceMode){
+            if(targetsRemaining > 0){
+              targetColor = chooseTargetColor();
+              targetColorEl.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${targetColor.toLowerCase()};border:1px solid #000;margin-right:6px;"></span>${targetColor}`;
+              // Refresh the top bar to reflect the newly chosen target colour
+              updateTopInfo();
+            }
+          }
+          // Sequence mode progression: after removing the current colour, move
+          // to the next colour in the sequence or complete the level.  The
+          // board completion logic at the end of the click handler is skipped
+          // when sequence mode is active.
+          if(sequenceMode){
+            // Advance to the next colour in the sequence
+            sequenceIndex++;
+            if(sequenceIndex < sequenceTargets.length){
+              // Update the target colour to the next one in the sequence
+              targetColor = sequenceTargets[sequenceIndex];
+              // Recalculate how many spheres of the new target remain
+              targetsRemaining = spheres.filter(sp => isValidSphere(sp) && !sp.isBonus && sp.color === targetColor).length;
+              // Update the hidden target element and top bar to show the next target
+              targetColorEl.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${targetColor.toLowerCase()};border:1px solid #000;margin-right:6px;"></span>${targetColor}`;
+              updateTopInfo();
+            } else {
+              // Sequence complete: award streak bonus and advance level
+              const streakBonus = streak * 5 * comboMultiplier;
+              points += streakBonus;
+              showBonus(`🎉 SEQUENCE COMPLETE! Combo x${comboMultiplier} • Bonus +${streakBonus}! 🎉`, 'level');
+              playSound(levelUpSound, 1.4, 0.6);
+              level++;
+              levelEl.textContent = level;
+              streakEl.textContent = streak;
+              pointsEl.textContent = points;
+              // Unlock the sequencePro achievement if not already done
+              if(!achievements.sequencePro){
+                achievements.sequencePro = true;
+                showBonus('🏅 Achievement: ' + achievementsInfo.sequencePro.title + '!', 'level');
+                updateAchievementsDisplay();
+                saveProfile();
+              }
+              saveProfile();
+              // Spawn a fresh board (will generate a new sequence) and background
+              spawnSpheres();
+              setLevelBackground();
+              // Restart the timer for the new level
+              stopTimer();
+              startTimer(true);
+              updateTopInfo();
+            }
+          }
+        } else {
+          // Wrong sphere clicked
+          points -= 2;
+          streak = 0;
+          comboMultiplier = 1;
+          mastery[s.color] = mastery[s.color] || {correct:0, wrong:0};
+          mastery[s.color].wrong++;
+          showBonus('Try again!', 'wrong');
+          playSound(neutralSound, 1.5, 0.5);
+          addHistory('✖', s.color);
+          saveProfile();
+          // In sequence mode, reset the sequence to the first colour when the
+          // player clicks the wrong sphere.  This forces the player to
+          // restart the sequence from the beginning.
+          if(sequenceMode && Array.isArray(sequenceTargets) && sequenceTargets.length > 0){
+            sequenceIndex = 0;
+            targetColor = sequenceTargets[0];
+            targetsRemaining = spheres.filter(sp => isValidSphere(sp) && !sp.isBonus && sp.color === targetColor).length;
+            // Update hidden target element and top bar
+            targetColorEl.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${targetColor.toLowerCase()};border:1px solid #000;margin-right:6px;"></span>${targetColor}`;
+            updateTopInfo();
+          }
+        }
+        hit = true;
+        break;
+      }
+    }
+    if(!hit){
+      // Missed entirely
+      streak = 0;
+      comboMultiplier = 1;
+      addHistory('✖', 'Miss');
+      showBonus('❌ Miss!', 'wrong');
+      playSound(neutralSound, 1.5, 0.5);
+      saveProfile();
+      // Reset sequence on a miss in sequence mode
+      if(sequenceMode && Array.isArray(sequenceTargets) && sequenceTargets.length > 0){
+        sequenceIndex = 0;
+        targetColor = sequenceTargets[0];
+        targetsRemaining = spheres.filter(sp => isValidSphere(sp) && !sp.isBonus && sp.color === targetColor).length;
+        targetColorEl.innerHTML = `<span style="display:inline-block;width:16px;height:16px;border-radius:50%;background:${targetColor.toLowerCase()};border:1px solid #000;margin-right:6px;"></span>${targetColor}`;
+        updateTopInfo();
+      }
+    }
+    pointsEl.textContent = points;
+    streakEl.textContent = streak;
+    updateMasteryDisplay();
+    updateHighScoreDisplay();
+
+    // Refresh accuracy display and evaluate achievements after each click.
+    updateAccuracyDisplay();
+    checkAchievements();
+    // Always refresh the top info bar so accuracy and other fields stay current
+    updateTopInfo();
+
+    // In non‑sequence mode, check if all normal spheres have been cleared.  We
+    // only advance to the next level if the player has actually removed all
+    // target spheres and the first click has already been processed.  When
+    // targetsRemaining reaches zero and firstClickIgnored is false, the level
+    // is considered complete.  In sequence mode, level progression is
+    // handled inside the sequence logic.
+    if(!sequenceMode){
+      if(targetsRemaining <= 0 && !firstClickIgnored){
+        /*
+          Advance to the next level only if the player has actually scored or
+          built up a streak.  This prevents an immediate level-up if a stray
+          click occurs before any meaningful interaction.  Without this check
+          clicking the Start Game button could produce an empty board (due to
+          event propagation) and prematurely increment the level.
+        */
+        if(points > 0 || streak > 0){
+          const streakBonus = streak * 5 * comboMultiplier;
+          points += streakBonus;
+          showBonus(`🎉 LEVEL UP! Combo x${comboMultiplier} • Bonus +${streakBonus}! 🎉`, 'level');
+          playSound(levelUpSound, 1.4, 0.6);
+          level++;
+          levelEl.textContent = level;
+          streakEl.textContent = streak;
+          pointsEl.textContent = points;
+          saveProfile();
+          spawnSpheres();
+          setLevelBackground();
+          // Restart the countdown timer for the new level
+          stopTimer();
+          startTimer(true);
+          updateTopInfo();
+        } else {
+          // If no points or streak yet, simply regenerate the current level to
+          // ensure there are targets available.  Do not change the level.
+          spawnSpheres();
+          setLevelBackground();
+          // Restart the countdown timer when regenerating the level
+          stopTimer();
+          startTimer(true);
+          updateTopInfo();
+        }
+      } else if(targetsRemaining <= 0 && firstClickIgnored){
+        // If we're still ignoring the first click but for some reason there are no
+        // targets remaining (e.g. a race condition during initial spawn), simply
+        // repopulate the level without changing the level number.
+        spawnSpheres();
+        setLevelBackground();
+        // Restart the timer when regenerating due to ignored first click
+        stopTimer();
+        startTimer(true);
+        updateTopInfo();
+      }
+    }
+  });
+
+  function showBonus(msg, type){
+    bonusMsgEl.textContent = msg; bonusMsgEl.classList.add('show');
+    if(type==='correct') bonusMsgEl.style.color='lime';
+    else if(type==='wrong') bonusMsgEl.style.color='crimson';
+    else if(type==='level') bonusMsgEl.style.color='gold';
+    setTimeout(()=> bonusMsgEl.classList.remove('show'), 1500);
+  }
+
+  function addHistory(symbol, color){
+    const div = document.createElement('div'); div.className='history-item';
+    const colorDot = color!=='Miss' && color!=='Bonus' ? `<span class="history-color" style="background:${color.toLowerCase()}"></span>` : '';
+    div.innerHTML = `${colorDot}<span>${color}</span><span>${symbol}</span>`;
+    historyEl.prepend(div); if(historyEl.childNodes.length>30) historyEl.removeChild(historyEl.lastChild);
+  }
+
+  function gameLoop(){
+    updateSpheres();
+    drawSpheres();
+    // Draw particles after spheres so they appear on top
+    drawParticles();
+    requestAnimationFrame(gameLoop);
+  }
+  speedSlider.addEventListener('input', ()=>{ currentSpeed = parseFloat(speedSlider.value); saveProfile(); });
+  currentSpeed = parseFloat(speedSlider.value);
+
+  document.getElementById('startBtn').addEventListener('click', (ev)=>{
+    // Prevent the start button click from bubbling up to the canvas which could
+    // inadvertently trigger the canvas click handler. Without stopping
+    // propagation, clicking the Start Game button could also register as a
+    // click on the game area, immediately causing a level-up reset.  By
+    // stopping propagation we ensure that the Start click only affects game
+    // initialization.
+    ev.stopPropagation();
+    // Reset game state
+    streak = 0;
+    comboMultiplier = 1;
+    points = 0;
+    level = 1;
+    // First resize the canvas to its proper dimensions based on the panel state;
+    // this ensures that spawnSpheres() places new spheres using up-to-date
+    // canvas.width and canvas.height. Without this, spheres could be spawned
+    // relative to stale dimensions and hit detection would fail.
+    resizeCanvas();
+    // Now spawn a fresh set of spheres and draw them.
+    spawnSpheres();
+    // Update the level-dependent background image for the first level
+    setLevelBackground();
+    drawSpheres();
+    updateMasteryDisplay();
+    saveProfile();
+
+    // Refresh the top info bar to reflect the reset score and new target colour
+    updateTopInfo();
+
+    // Set the first-click ignore flag so that the upcoming click (usually the
+    // player's first attempt) does not inadvertently clear the board or
+    // trigger a level-up.  The flag will be cleared on the next click.
+    firstClickIgnored = true;
+    // Also ignore the very next canvas click triggered by the start button
+    // itself.  This prevents propagation artefacts from immediately
+    // incrementing the level.
+    ignoreNextCanvasClick = true;
+
+    // Reset pause state when starting a new game
+    isPaused = false;
+    if(pauseBtn){ pauseBtn.textContent = 'Pause'; }
+    if(pauseOverlay){ pauseOverlay.style.display = 'none'; }
+    // Start or reset the timer if timer mode is enabled.  Always stop any
+    // existing timer to ensure a fresh countdown on game start.
+    stopTimer();
+    startTimer(true);
+  });
+  pauseBtn.addEventListener('click', ()=>{
+    isPaused = !isPaused;
+    pauseBtn.textContent = isPaused ? 'Resume' : 'Pause';
+    pauseOverlay.style.display = isPaused ? 'flex' : 'none';
+    // Update the timer display while toggling pause.  When paused, the
+    // timer continues running internally but the countdown does not
+    // decrease because the interval checks isPaused.  We still refresh
+    // the top info bar so the timer shows the remaining time.
+    updateTopInfo();
+  });
+  document.getElementById('clearHistoryBtn').addEventListener('click', ()=>{ historyEl.innerHTML=''; saveProfile(); });
+
+  /* ===== ACCURACY & ACHIEVEMENTS ===== */
+  /**
+   * Update the accuracy display outside of the top info bar.  Calculates
+   * the percentage of correct hits relative to total clicks.  If no
+   * clicks have occurred, accuracy is shown as 100% by convention.
+   */
+  function updateAccuracyDisplay(){
+    if(topAccuracyEl){
+      const acc = (totalClicks > 0) ? Math.round((correctClicks / totalClicks) * 100) : 100;
+      topAccuracyEl.textContent = 'Acc: ' + acc + '%';
+    }
+  }
+
+  /**
+   * Populate the achievements section of the settings panel.  Iterates over
+   * the achievementsInfo map to generate a list of achievements with
+   * checkboxes indicating unlocked status.  Called whenever an
+   * achievement changes or a profile is loaded.
+   */
+  function updateAchievementsDisplay(){
+    const achEl = document.getElementById('achievements');
+    if(!achEl) return;
+    let html = '';
+    for(const key in achievementsInfo){
+      const info = achievementsInfo[key];
+      const unlocked = achievements[key];
+      html += '<div style="display:flex;align-items:center;margin:2px 0;">';
+      html += '<span style="width:12px;height:12px;border:1px solid #000;border-radius:2px;';
+      html += unlocked ? 'background:lime;' : 'background:transparent;';
+      html += 'margin-right:4px;"></span>';
+      html += '<span>' + info.title + '</span>';
+      html += '</div>';
+    }
+    achEl.innerHTML = html;
+  }
+
+  /**
+   * Evaluate achievement conditions based on the current game state.  When a
+   * condition is met for the first time the corresponding achievement is
+   * marked as unlocked, the achievements display is refreshed and the
+   * player is notified via a bonus message.  If any achievements are
+   * unlocked, the profile is saved to persist progress.
+   */
+  function checkAchievements(){
+    let updated = false;
+    // Unlock firstScore when the player scores at least 100 points in one session
+    if(!achievements.firstScore && points >= 100){
+      achievements.firstScore = true;
+      showBonus('🏅 Achievement: ' + achievementsInfo.firstScore.title + '!', 'level');
+      updated = true;
+    }
+    // Unlock streakMaster when the player reaches a streak of 10
+    if(!achievements.streakMaster && streak >= 10){
+      achievements.streakMaster = true;
+      showBonus('🏅 Achievement: ' + achievementsInfo.streakMaster.title + '!', 'level');
+      updated = true;
+    }
+    // Unlock levelTen when level reaches or surpasses 10
+    if(!achievements.levelTen && level >= 10){
+      achievements.levelTen = true;
+      showBonus('🏅 Achievement: ' + achievementsInfo.levelTen.title + '!', 'level');
+      updated = true;
+    }
+    // Unlock sequencePro when a sequence is completed in sequence mode
+    if(!achievements.sequencePro && sequenceMode && Array.isArray(sequenceTargets) && sequenceTargets.length > 0 && sequenceIndex >= sequenceTargets.length){
+      achievements.sequencePro = true;
+      showBonus('🏅 Achievement: ' + achievementsInfo.sequencePro.title + '!', 'level');
+      updated = true;
+    }
+    // Unlock timerChampion when completing a level with at least 10 seconds remaining in timer mode
+    if(!achievements.timerChampion && timerMode && timeRemaining >= 10 && targetsRemaining <= 0){
+      achievements.timerChampion = true;
+      showBonus('🏅 Achievement: ' + achievementsInfo.timerChampion.title + '!', 'level');
+      updated = true;
+    }
+    if(updated){
+      updateAchievementsDisplay();
+      // Save profile to persist unlocked achievements
+      saveProfile();
+    }
+  }
+
+  // Start loop
+  gameLoop();
+
+  // =========================
+  // 🧪 SELF TESTS (non-intrusive)
+  // =========================
+  function runSelfTests(){
+    const out = [];
+    function ok(name, cond){ out.push(`${cond?'✅':'❌'} ${name}`); }
+    try {
+      ok('points is number', typeof points === 'number');
+      ok('level is number', typeof level === 'number');
+      ok('streak is number', typeof streak === 'number');
+      ok('currentSpeed is number', typeof currentSpeed === 'number');
+      ok('comboMultiplier is number', typeof comboMultiplier === 'number');
+      // Validator tests
+      ok('isValidSphere detects good object', isValidSphere({x:10,y:10,r:5,vx:1,vy:0,color:'Red'}));
+      ok('isValidSphere rejects undefined', !isValidSphere(undefined));
+      ok('isValidSphere rejects NaN', !isValidSphere({x:NaN,y:0,r:10,vx:1,vy:1,color:'Blue'}));
+      // Sanitize test
+      const temp = [ {x:0,y:0,r:5,vx:1,vy:0,color:'Red'}, undefined, {x:5,y:5,r:5,vx:0,vy:1,color:'Green'} ];
+      const cleaned = temp.filter(isValidSphere);
+      ok('sanitize removes invalid entries', cleaned.length === 2);
+      // Tolerance test for update/draw with undefined inside spheres
+      const backup = spheres.slice();
+      spheres = [ {x:40,y:40,r:10,vx:1,vy:0,color:'Red'}, undefined, {x:80,y:80,r:10,vx:-1,vy:0,color:'Blue'} ];
+      let noThrowUpdate=true, noThrowDraw=true;
+      try { updateSpheres(); } catch(e){ noThrowUpdate=false; }
+      try { drawSpheres(); } catch(e){ noThrowDraw=false; }
+      spheres = backup; // restore
+      ok('updateSpheres tolerates undefined entries', noThrowUpdate);
+      ok('drawSpheres tolerates undefined entries', noThrowDraw);
+      document.getElementById('tests').textContent = out.join('\n');
+    } catch(e){ document.getElementById('tests').textContent = 'Test error: '+e.message; }
+  }
+  window.addEventListener('load', runSelfTests);
+</script>
+</body>
+</html>
