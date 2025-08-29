@@ -11,7 +11,7 @@
   Stroop Mode: The target word may show a mismatched colour (brain-training challenge).
   Sequence Mode: Memorise and repeat a sequence of colours.
   Timer Mode: Beat the clock to set a high score.
-  Colour-Blind Mode: Adds unique symbols to each colour for easier identification.
+  Colour-Blind Mode: Uses a high-contrast palette and unique shape symbols for each colour to aid identification.
 
 ⭐ Bonuses & Power-Ups
   Streak Bonus: Each consecutive correct click increases your combo multiplier.
