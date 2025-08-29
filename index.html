@@ -463,17 +463,18 @@
     timerChampion:{ title: 'Timer Champion', description: 'Finish a level with ≥10 seconds remaining (Timer Mode)' }
   };
 
-  // Map base colours to single‑letter symbols for colour‑blind mode.  When
-  // enabled these letters are drawn on each sphere to provide a non‑colour
+  // Map base colours to simple shape symbols for colour‑blind mode.  When
+  // enabled these shapes are drawn on each sphere to provide a non‑colour
   // cue.  Extended colours are mapped back to their base hue via
   // colorSoundMap.  If a colour is missing from this map its first
   // character is used as a fallback.
   const colorSymbolsMap = {
-    Red: 'R', Green: 'G', Blue: 'B', Yellow: 'Y', Orange: 'O', Purple: 'P', Cyan: 'C'
+    Red: '▲', Green: '■', Blue: '●', Yellow: '★', Orange: '◆', Purple: '✚', Cyan: '✖'
   };
 
-  // Colour‑blind mode toggle and state.  When enabled, a letter symbol is
-  // drawn on each sphere to aid players with colour vision deficiencies.
+  // Colour‑blind mode toggle and state.  When enabled, a shape symbol is
+  // drawn on each sphere and a high‑contrast palette is used to aid players
+  // with colour vision deficiencies.
   const colorBlindToggle = document.getElementById('colorBlindToggle');
   let colorBlindMode = false;
   // Initialise colour‑blind mode from the checkbox state
@@ -481,9 +482,11 @@
   if(colorBlindToggle){
     colorBlindToggle.addEventListener('change', () => {
       colorBlindMode = colorBlindToggle.checked;
+      applyHardMode(); // swap to colour‑blind palette if needed
       // Save the setting and redraw to apply symbols
       saveProfile();
       drawSpheres();
+      updateTopInfo();
     });
   }
 
@@ -589,6 +592,10 @@
     'Plum','MediumOrchid','MediumPurple','SlateBlue',// purples
     'LightCyan','Turquoise','MediumTurquoise','DarkCyan'  // cyans
   ];
+  // Colour‑blind friendly palette using high‑contrast colours commonly
+  // recommended for real‑world data visualisation.  Enabled when
+  // colour‑blind mode is active to ensure maximum distinguishability.
+  const colorBlindColorsList = ['#E69F00','#56B4E9','#009E73','#F0E442','#0072B2','#D55E00','#CC79A7'];
   // Map subtle colours back to their base hue for sound assignment.  This
   // ensures that even when hard mode is enabled, the short and sharp sound
   // effects still correspond to the underlying colour family.  If a colour
@@ -600,7 +607,9 @@
     Khaki: 'Yellow', Gold: 'Yellow', GoldenRod: 'Yellow', DarkKhaki: 'Yellow',
     LightSalmon: 'Orange', DarkOrange: 'Orange', Coral: 'Orange', OrangeRed: 'Orange',
     Plum: 'Purple', MediumOrchid: 'Purple', MediumPurple: 'Purple', SlateBlue: 'Purple',
-    LightCyan: 'Cyan', Turquoise: 'Cyan', MediumTurquoise: 'Cyan', DarkCyan: 'Cyan'
+    LightCyan: 'Cyan', Turquoise: 'Cyan', MediumTurquoise: 'Cyan', DarkCyan: 'Cyan',
+    '#E69F00':'Orange', '#56B4E9':'Blue', '#009E73':'Green', '#F0E442':'Yellow',
+    '#0072B2':'Blue', '#D55E00':'Red', '#CC79A7':'Purple'
   };
 
   // =========================
@@ -953,11 +962,12 @@
       const acc = (totalClicks > 0) ? Math.round((correctClicks / totalClicks) * 100) : 100;
       topAccuracyEl.textContent = 'Acc: ' + acc + '%';
     }
-    // Update the target colour display
+    // Update the target colour display using a friendly name when available
     if(topTargetColorEl){
-      const colourName = targetColor || '';
-      const lower = colourName.toLowerCase();
-      topTargetColorEl.innerHTML = `<span class="top-color-dot" style="background:${lower};"></span>${colourName}`;
+      const colourKey = targetColor || '';
+      const displayName = colorSoundMap[colourKey] || colourKey;
+      const lower = colourKey.toLowerCase();
+      topTargetColorEl.innerHTML = `<span class="top-color-dot" style="background:${lower};"></span>${displayName}`;
     }
     // Update the timer display.  Show only when timer mode is enabled.
     if(topTimerEl){
@@ -1028,11 +1038,10 @@
           soundOn = data.settings.soundOn;
           soundToggle.checked = soundOn;
         }
-        // Load hard mode setting and update palette
+        // Load hard mode setting
         if(typeof data.settings.hardMode === 'boolean'){
           hardMode = data.settings.hardMode;
           if(hardModeToggle) hardModeToggle.checked = hardMode;
-          applyHardMode();
         }
         // Load stroop mode setting and update labels
         if(typeof data.settings.stroopMode === 'boolean'){
@@ -1056,6 +1065,8 @@
           if(colorBlindToggle) colorBlindToggle.checked = colorBlindMode;
         }
       }
+      // Apply palette selections after all settings are loaded
+      applyHardMode();
       // Restore click statistics if present
       if(typeof data.totalClicks === 'number') totalClicks = data.totalClicks;
       if(typeof data.correctClicks === 'number') correctClicks = data.correctClicks;
@@ -1135,7 +1146,8 @@
     masteryEl.innerHTML = '';
     for(const c of colors){
       const score = (mastery[c]?.correct||0) - (mastery[c]?.wrong||0);
-      masteryEl.innerHTML += `<div><span class="history-color" style="background:${c.toLowerCase()}"></span>${c}: ${score} (✔${mastery[c]?.correct||0}/✖${mastery[c]?.wrong||0})</div>`;
+      const name = colorSoundMap[c] || c;
+      masteryEl.innerHTML += `<div><span class="history-color" style="background:${c.toLowerCase()}"></span>${name}: ${score} (✔${mastery[c]?.correct||0}/✖${mastery[c]?.wrong||0})</div>`;
     }
   }
 
@@ -1157,8 +1169,13 @@
    * current board is regenerated to avoid having spheres with invalid colours.
    */
   function applyHardMode(){
-    // Swap the colours array to the appropriate palette
-    colors = hardMode ? hardColorsList.slice() : baseColorsList.slice();
+    // Swap the colours array to the appropriate palette.  Colour‑blind mode
+    // takes precedence, using a dedicated high‑contrast palette.
+    if(colorBlindMode){
+      colors = colorBlindColorsList.slice();
+    } else {
+      colors = hardMode ? hardColorsList.slice() : baseColorsList.slice();
+    }
     // Build a new mastery object containing only colours in the active palette
     const newMastery = {};
     colors.forEach(col => {
@@ -1181,12 +1198,13 @@
       // Restart the timer when regenerating due to palette change
       stopTimer();
       startTimer(true);
-      updateTopInfo();
     }
     // When the palette changes, update the labels used in Stroop mode to match
     // the new palette.  This ensures mismatched names are chosen from the
     // currently active colours.
     applyStroopLabels();
+    // Refresh top info after palette changes
+    updateTopInfo();
   }
 
   /**
@@ -1208,12 +1226,12 @@
           do {
             randomName = colors[Math.floor(Math.random() * colors.length)];
           } while(randomName === s.color);
-          s.label = randomName;
+          s.label = colorSoundMap[randomName] || randomName;
         } else {
-          s.label = s.color;
+          s.label = colorSoundMap[s.color] || s.color;
         }
       } else {
-        s.label = s.color;
+        s.label = colorSoundMap[s.color] || s.color;
       }
     }
   }
@@ -1475,17 +1493,17 @@
         ctx.strokeStyle = 'black';
         ctx.stroke(circPath);
       }
-      // Draw color names on top for normal spheres
+      // Draw colour names on top for normal spheres
       if(showNamesCheckbox.checked && !s.isBonus){
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.font = `${Math.max(12, s.r/2)}px Arial`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         // When Stroop mode is enabled a mismatched label is stored on the sphere
-        const label = (typeof s.label === 'string') ? s.label : s.color;
+        const label = (typeof s.label === 'string') ? s.label : (colorSoundMap[s.color] || s.color);
         ctx.fillText(label, s.x, s.y);
       }
       // Overlay a symbol for colour‑blind mode.  Uses the base hue of
-      // the colour to choose a letter from colorSymbolsMap.  Symbols are
+      // the colour to choose a shape from colorSymbolsMap.  Symbols are
       // drawn in the top‑left corner of the sphere to avoid overlapping
       // the main label.
       if(colorBlindMode && !s.isBonus){
