@@ -46,3 +46,24 @@
 Try Stroop Mode for an extra cognitive workout.
 
 Aim for streaks and quick responses to maximise points.
+
+## Running the project
+
+The project is a plain HTML/JS game, so you only need a static file server:
+
+1. Install any simple static server if you do not already have one, e.g. `npm install -g serve` or use Python's built-in server.
+2. From the repo root run one of the following commands:
+   - `serve .`
+   - `python3 -m http.server`
+3. Open `http://localhost:3000/index.html` (or the port your server prints) in your browser.
+
+### Running previous versions
+
+All previous versions are preserved in Git history. To run an older state:
+
+```bash
+git checkout <commit-sha>
+# restart your static server if necessary, then refresh the browser
+```
+
+You can return to the latest version with `git checkout main` (or whichever branch you were on).
